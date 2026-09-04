@@ -31,9 +31,9 @@ If a claimed issue moves to a terminal state (`Done`, `Closed`, `Cancelled`, or 
 Symphony stops the active agent for that issue and cleans up matching workspaces.
 
 If Codex reports that operator input, approval, or MCP elicitation is required, Symphony keeps the
-issue claimed and exposes it as blocked in the runtime state, JSON API, and dashboard. Blocked
-entries are in memory only; restarting the orchestrator clears that blocked map, so any still-active
-tracker issue can become a dispatch candidate again after restart.
+issue claimed and exposes it as blocked in the runtime state, JSON API, and dashboard. The blocked
+runtime map is in memory only; restarting the orchestrator clears it, while the completed Codex
+attempt remains available in run history.
 
 ## How to use it
 
@@ -198,7 +198,8 @@ codex:
 - If a later reload fails, Symphony keeps running with the last known good workflow and logs the
   reload error until the file is fixed.
 - `server.port` or CLI `--port` enables the optional Phoenix LiveView dashboard and JSON API at
-  `/`, `/api/v1/state`, `/api/v1/<issue_identifier>`, and `/api/v1/refresh`.
+  `/`, `/history/<run_id>`, `/api/v1/state`, `/api/v1/history`, `/api/v1/history/<run_id>`,
+  `/api/v1/<issue_identifier>`, and `/api/v1/refresh`.
 
 ### Linear adapter profile
 
@@ -292,10 +293,14 @@ codex:
 The observability UI now runs on a minimal Phoenix stack:
 
 - LiveView for the dashboard at `/`
+- Codex run history and raw App Server output at `/history/<run_id>`
 - JSON API for operational debugging under `/api/v1/*`
 - Bandit as the HTTP server
 - Phoenix dependency static assets for the LiveView client bootstrap
 - Tracker issue identifiers link to the tracker-provided URL when it uses `http` or `https`
+
+Codex run history is persisted as rotating JSONL files under the configured log root
+(`codex-history.jsonl` plus up to four backups), so completed runs remain available after restart.
 
 ## Project Layout
 

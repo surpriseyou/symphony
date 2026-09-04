@@ -461,17 +461,15 @@ defmodule SymphonyElixir.Codex.AppServer do
       {:error, _reason} ->
         log_non_json_stream_line(payload_string, "turn stream")
 
-        if protocol_message_candidate?(payload_string) do
-          emit_message(
-            on_message,
-            :malformed,
-            %{
-              payload: payload_string,
-              raw: payload_string
-            },
-            metadata_from_message(port, %{raw: payload_string})
-          )
-        end
+        emit_message(
+          on_message,
+          if(protocol_message_candidate?(payload_string), do: :malformed, else: :stream_output),
+          %{
+            payload: payload_string,
+            raw: payload_string
+          },
+          metadata_from_message(port, %{raw: payload_string})
+        )
 
         receive_loop(port, on_message, timeout_ms, "", tool_executor, auto_approve_requests)
     end

@@ -37,6 +37,22 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
     end
   end
 
+  @spec history(Conn.t(), map()) :: Conn.t()
+  def history(conn, params) do
+    case history_limit(params["limit"]) do
+      {:ok, limit} -> json(conn, Presenter.history_payload(limit))
+      :error -> error_response(conn, 400, "invalid_limit", "limit must be an integer between 1 and 100")
+    end
+  end
+
+  @spec run(Conn.t(), map()) :: Conn.t()
+  def run(conn, %{"run_id" => run_id}) do
+    case Presenter.history_run_payload(run_id) do
+      {:ok, payload} -> json(conn, payload)
+      {:error, :run_not_found} -> error_response(conn, 404, "run_not_found", "Run not found")
+    end
+  end
+
   @spec method_not_allowed(Conn.t(), map()) :: Conn.t()
   def method_not_allowed(conn, _params) do
     error_response(conn, 405, "method_not_allowed", "Method not allowed")
@@ -60,4 +76,15 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   defp snapshot_timeout_ms do
     Endpoint.config(:snapshot_timeout_ms) || 15_000
   end
+
+  defp history_limit(nil), do: {:ok, 100}
+
+  defp history_limit(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {limit, ""} when limit in 1..100 -> {:ok, limit}
+      _ -> :error
+    end
+  end
+
+  defp history_limit(_value), do: :error
 end

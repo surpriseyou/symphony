@@ -420,6 +420,225 @@ pre,
   color: var(--muted);
 }
 
+.history-summary {
+  display: flex;
+  gap: 1rem 1.5rem;
+  flex-wrap: wrap;
+  margin-top: 1.15rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.history-summary strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.codex-log-card {
+  min-width: 0;
+}
+
+.log-window-note {
+  margin: 1rem 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.codex-terminal {
+  margin-top: 1rem;
+  overflow: hidden;
+  border: 1px solid #2b303b;
+  border-radius: 20px;
+  background: #111318;
+  box-shadow: 0 16px 32px rgba(15, 23, 42, 0.12);
+}
+
+.codex-terminal-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 2.8rem;
+  padding: 0.7rem 0.95rem;
+  border-bottom: 1px solid #2b303b;
+  background: #191c23;
+  color: #c6ccd8;
+  font-size: 0.78rem;
+}
+
+.terminal-lights {
+  display: inline-flex;
+  gap: 0.3rem;
+}
+
+.terminal-lights i {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: #656b78;
+}
+
+.terminal-lights i:first-child {
+  background: #ef6a63;
+}
+
+.terminal-lights i:nth-child(2) {
+  background: #e9bd4c;
+}
+
+.terminal-lights i:nth-child(3) {
+  background: #52c478;
+}
+
+.codex-terminal-title {
+  font-family: "Sohne Mono", "SFMono-Regular", "SF Mono", Consolas, "Liberation Mono", monospace;
+  font-weight: 600;
+}
+
+.codex-terminal-mode {
+  margin-left: auto;
+  color: #858d9e;
+  font-size: 0.72rem;
+}
+
+.codex-terminal-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.85rem;
+  padding: 0.28rem 0.68rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.codex-terminal-status-live {
+  border-color: rgba(16, 163, 127, 0.3);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.codex-terminal-status-success {
+  border-color: rgba(16, 163, 127, 0.3);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.codex-terminal-status-danger {
+  border-color: #f6d3cf;
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.codex-log-stream {
+  max-height: min(68vh, 44rem);
+  margin: 0;
+  padding: 0.8rem 1rem 1rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
+  scroll-behavior: auto;
+  list-style: none;
+}
+
+.codex-log-line {
+  display: grid;
+  grid-template-columns: 4.6rem 0.55rem minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: start;
+  padding: 0.6rem 0.35rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.codex-log-line:last-child {
+  border-bottom: 0;
+}
+
+.codex-log-time {
+  padding-top: 0.1rem;
+  color: #737c8d;
+  font-size: 0.74rem;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.codex-log-marker {
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-top: 0.35rem;
+  border-radius: 50%;
+  background: #737c8d;
+  box-shadow: 0 0 0 3px rgba(115, 124, 141, 0.12);
+}
+
+.codex-log-line-success .codex-log-marker {
+  background: #52c478;
+  box-shadow: 0 0 0 3px rgba(82, 196, 120, 0.14);
+}
+
+.codex-log-line-danger .codex-log-marker {
+  background: #ef6a63;
+  box-shadow: 0 0 0 3px rgba(239, 106, 99, 0.14);
+}
+
+.codex-log-content {
+  min-width: 0;
+}
+
+.codex-log-kind {
+  color: #858d9e;
+  font-family: "Sohne Mono", "SFMono-Regular", "SF Mono", Consolas, "Liberation Mono", monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.codex-log-text {
+  margin: 0.2rem 0 0;
+  color: #e6eaf1;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.history-debug {
+  margin-top: 1rem;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.history-debug summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.history-debug-list {
+  display: grid;
+  gap: 0.8rem;
+  margin-top: 0.75rem;
+}
+
+.history-debug-event {
+  padding: 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--card-muted);
+}
+
+.history-debug-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.history-debug-event .code-panel {
+  max-height: 28rem;
+  margin-top: 0.65rem;
+  overflow: auto;
+}
+
 .error-card {
   border-radius: 24px;
   padding: 1.25rem;
@@ -460,6 +679,20 @@ pre,
 @media (max-width: 560px) {
   .metric-grid {
     grid-template-columns: 1fr;
+  }
+
+  .codex-terminal-mode {
+    display: none;
+  }
+
+  .codex-log-stream {
+    padding-right: 0.65rem;
+    padding-left: 0.65rem;
+  }
+
+  .codex-log-line {
+    grid-template-columns: 3.7rem 0.5rem minmax(0, 1fr);
+    gap: 0.5rem;
   }
 
   .section-card,

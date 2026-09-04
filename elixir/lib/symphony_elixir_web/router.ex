@@ -26,13 +26,18 @@ defmodule SymphonyElixirWeb.Router do
     pipe_through(:browser)
 
     live("/", DashboardLive, :index)
+    live("/history/:run_id", DashboardLive, :history)
   end
 
   scope "/", SymphonyElixirWeb do
     get("/api/v1/state", ObservabilityApiController, :state)
+    get("/api/v1/history", ObservabilityApiController, :history)
+    get("/api/v1/history/:run_id", ObservabilityApiController, :run)
 
     match(:*, "/", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/state", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/history", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/history/:run_id", ObservabilityApiController, :method_not_allowed)
     post("/api/v1/refresh", ObservabilityApiController, :refresh)
     match(:*, "/api/v1/refresh", ObservabilityApiController, :method_not_allowed)
     get("/api/v1/:issue_identifier", ObservabilityApiController, :issue)

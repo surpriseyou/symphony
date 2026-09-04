@@ -7,7 +7,7 @@ defmodule SymphonyElixir.Orchestrator do
   require Logger
   import Bitwise, only: [<<<: 2]
 
-  alias SymphonyElixir.{AgentRunner, Config, StatusDashboard, Tracker, Workspace}
+  alias SymphonyElixir.{AgentRunner, CodexHistory, Config, StatusDashboard, Tracker, Workspace}
   alias SymphonyElixir.Tracker.Issue
 
   @continuation_retry_delay_ms 1_000
@@ -137,6 +137,7 @@ defmodule SymphonyElixir.Orchestrator do
         {running_entry, state} = pop_running_entry(state, issue_id)
         state = record_session_completion_totals(state, running_entry)
         session_id = running_entry_session_id(running_entry)
+        finish_history_for_agent_down(running_entry, reason)
 
         state = handle_agent_down(reason, state, issue_id, running_entry, session_id)
 
@@ -174,6 +175,8 @@ defmodule SymphonyElixir.Orchestrator do
 
       running_entry ->
         {updated_running_entry, token_delta} = integrate_codex_update(running_entry, update)
+
+        :ok = CodexHistory.record_event(history_context(updated_running_entry), update)
 
         state =
           state
@@ -558,6 +561,7 @@ defmodule SymphonyElixir.Orchestrator do
 
       %{pid: pid, ref: ref, identifier: identifier} = running_entry ->
         state = record_session_completion_totals(state, running_entry)
+        :ok = CodexHistory.finish_run(history_context(running_entry), :cancelled, cancellation_reason(running_entry))
 
         stop_running_task(pid, ref, state.task_supervisor)
 
@@ -745,6 +749,8 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp stop_and_block_issue(%State{} = state, issue_id, running_entry, error) do
+    :ok = CodexHistory.finish_run(history_context(running_entry), :blocked, error)
+
     stop_running_task(
       Map.get(running_entry, :pid),
       Map.get(running_entry, :ref),
@@ -758,6 +764,7 @@ defmodule SymphonyElixir.Orchestrator do
     blocked_entry = %{
       issue_id: issue_id,
       identifier: Map.get(running_entry, :identifier, issue_id),
+      run_id: Map.get(running_entry, :run_id),
       issue: Map.get(running_entry, :issue),
       worker_host: Map.get(running_entry, :worker_host),
       workspace_path: Map.get(running_entry, :workspace_path),
@@ -956,6 +963,8 @@ defmodule SymphonyElixir.Orchestrator do
          end) do
       {:ok, pid} ->
         ref = Process.monitor(pid)
+        run_id = CodexHistory.new_run_id()
+        started_at = DateTime.utc_now()
 
         Logger.info("Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"}")
 
@@ -963,6 +972,7 @@ defmodule SymphonyElixir.Orchestrator do
           Map.put(state.running, issue.id, %{
             pid: pid,
             ref: ref,
+            run_id: run_id,
             identifier: issue.identifier,
             issue: issue,
             worker_host: worker_host,
@@ -980,8 +990,10 @@ defmodule SymphonyElixir.Orchestrator do
             codex_last_reported_total_tokens: 0,
             turn_count: 0,
             retry_attempt: normalize_retry_attempt(attempt),
-            started_at: DateTime.utc_now()
+            started_at: started_at
           })
+
+        :ok = CodexHistory.start_run(history_context(Map.fetch!(running, issue.id)))
 
         %{
           state
@@ -1177,6 +1189,47 @@ defmodule SymphonyElixir.Orchestrator do
   defp notify_dashboard do
     StatusDashboard.notify_update()
   end
+
+  defp finish_history_for_agent_down(running_entry, reason) do
+    status = if input_required_blocker?(running_entry), do: :blocked, else: agent_down_status(reason)
+    finish_reason = history_finish_reason(running_entry, status, reason)
+    :ok = CodexHistory.finish_run(history_context(running_entry), status, finish_reason)
+  end
+
+  defp history_finish_reason(_running_entry, :completed, _reason), do: nil
+
+  defp history_finish_reason(running_entry, :blocked, reason),
+    do: blocker_error(running_entry, "agent exited: #{inspect(reason)}")
+
+  defp history_finish_reason(_running_entry, _status, reason), do: reason
+
+  defp agent_down_status(:normal), do: :completed
+  defp agent_down_status(_reason), do: :failed
+
+  defp cancellation_reason(%{issue: %Issue{state: state}}), do: "orchestrator stopped run while issue was #{state}"
+  defp cancellation_reason(_running_entry), do: "orchestrator stopped run"
+
+  defp history_context(running_entry) when is_map(running_entry) do
+    issue = Map.get(running_entry, :issue, %{})
+
+    %{
+      run_id: Map.get(running_entry, :run_id),
+      issue_id: Map.get(issue, :id),
+      issue_identifier: Map.get(running_entry, :identifier),
+      issue_url: Map.get(issue, :url),
+      attempt: history_attempt(Map.get(running_entry, :retry_attempt)),
+      worker_host: Map.get(running_entry, :worker_host),
+      workspace_path: Map.get(running_entry, :workspace_path),
+      session_id: Map.get(running_entry, :session_id),
+      started_at: Map.get(running_entry, :started_at),
+      codex_input_tokens: Map.get(running_entry, :codex_input_tokens, 0),
+      codex_output_tokens: Map.get(running_entry, :codex_output_tokens, 0),
+      codex_total_tokens: Map.get(running_entry, :codex_total_tokens, 0)
+    }
+  end
+
+  defp history_attempt(attempt) when is_integer(attempt) and attempt >= 0, do: attempt + 1
+  defp history_attempt(_attempt), do: 1
 
   defp handle_active_retry(state, issue, attempt, metadata) do
     if retry_candidate_issue?(issue, terminal_state_set()) and
@@ -1418,6 +1471,7 @@ defmodule SymphonyElixir.Orchestrator do
           issue_id: issue_id,
           identifier: metadata.identifier,
           issue_url: metadata.issue.url,
+          run_id: Map.get(metadata, :run_id),
           state: metadata.issue.state,
           worker_host: Map.get(metadata, :worker_host),
           workspace_path: Map.get(metadata, :workspace_path),
@@ -1457,6 +1511,7 @@ defmodule SymphonyElixir.Orchestrator do
           issue_id: issue_id,
           identifier: Map.get(metadata, :identifier),
           issue_url: blocked_issue_url(metadata),
+          run_id: Map.get(metadata, :run_id),
           state: blocked_issue_state(metadata),
           worker_host: Map.get(metadata, :worker_host),
           workspace_path: Map.get(metadata, :workspace_path),

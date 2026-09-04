@@ -8,6 +8,30 @@ This directory contains the Elixir agent orchestration service that polls Linear
 - Install deps: `mix setup`.
 - Main quality gate: `make all` (format check, lint, coverage, dialyzer).
 
+## Build and Executable Deployment
+
+- Build the executable from this directory with the absolute mise path:
+
+  ```bash
+  /home/mty/.local/bin/mise exec -- mix escript.build
+  ```
+
+- The generated executable is `bin/symphony`. Do not invoke it directly: its
+  shebang uses `/usr/bin/env escript`, and `escript` is supplied by mise.
+- `/usr/local/bin/symphony` is the global launcher. It must call the project
+  executable through `/home/mty/.local/bin/mise exec` and keep the caller's
+  workflow path and remaining arguments. Rebuild `bin/symphony` first; the
+  launcher will then run the new code without extra startup flags.
+- Start it with the workflow path as the first argument (relative paths are
+  resolved from the caller's directory):
+
+  ```bash
+  /usr/local/bin/symphony /path/to/WORKFLOW.md --i-understand-that-this-will-be-running-without-the-usual-guardrails
+  ```
+
+- If the global launcher needs to be restored, install the reviewed launcher
+  with `sudo install -m 0755 /tmp/symphony-launcher /usr/local/bin/symphony`.
+
 
 ## Codebase-Specific Conventions
 

@@ -7,12 +7,29 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   alias SymphonyElixirWeb.{Endpoint, ObservabilityPubSub, Presenter}
   @runtime_tick_ms 1_000
+  @max_live_log_events 300
+  @agent_message_summary_prefixes ["agent message streaming", "agent message content streaming"]
+  @history_stream_delta_paths [
+    ["params", "delta"],
+    ["params", "textDelta"],
+    ["params", "msg", "delta"],
+    ["params", "msg", "textDelta"],
+    ["params", "msg", "content"],
+    ["params", "msg", "payload", "delta"],
+    ["params", "msg", "payload", "textDelta"],
+    ["params", "msg", "payload", "content"],
+    ["params", "msg", "payload", "text"]
+  ]
 
   @impl true
   def mount(_params, _session, socket) do
     socket =
       socket
       |> assign(:payload, load_payload())
+      |> assign(:history, load_history())
+      |> assign(:history_run, nil)
+      |> assign(:page, :dashboard)
+      |> assign(:run_id, nil)
       |> assign(:now, DateTime.utc_now())
 
     if connected?(socket) do
@@ -24,17 +41,43 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   @impl true
+  def handle_params(%{"run_id" => run_id}, _uri, socket) do
+    {:noreply,
+     socket
+     |> assign(:page, :history)
+     |> assign(:run_id, run_id)
+     |> assign(:history_run, load_history_run(run_id))}
+  end
+
+  def handle_params(_params, _uri, socket) do
+    {:noreply, assign(socket, :page, :dashboard)}
+  end
+
+  @impl true
   def handle_info(:runtime_tick, socket) do
     schedule_runtime_tick()
-    {:noreply, assign(socket, :now, DateTime.utc_now())}
+
+    socket = assign(socket, :now, DateTime.utc_now())
+
+    socket =
+      case socket.assigns.page do
+        :history -> reload_active_history_run(socket)
+        _ -> assign(socket, :history, load_history())
+      end
+
+    {:noreply, socket}
   end
 
   @impl true
   def handle_info(:observability_updated, socket) do
-    {:noreply,
-     socket
-     |> assign(:payload, load_payload())
-     |> assign(:now, DateTime.utc_now())}
+    if socket.assigns.page == :history do
+      {:noreply, assign(socket, :now, DateTime.utc_now())}
+    else
+      {:noreply,
+       socket
+       |> assign(:payload, load_payload())
+       |> assign(:now, DateTime.utc_now())}
+    end
   end
 
   @impl true
@@ -48,10 +91,14 @@ defmodule SymphonyElixirWeb.DashboardLive do
               Symphony Observability
             </p>
             <h1 class="hero-title">
-              Operations Dashboard
+              <%= if @page == :history, do: "Codex Run History", else: "Operations Dashboard" %>
             </h1>
             <p class="hero-copy">
-              Current state, retry pressure, token usage, and orchestration health for the active Symphony runtime.
+              <%= if @page == :history do %>
+                Complete Codex protocol output and execution summary for this run.
+              <% else %>
+                Current state, retry pressure, token usage, and orchestration health for the active Symphony runtime.
+              <% end %>
             </p>
           </div>
 
@@ -68,6 +115,9 @@ defmodule SymphonyElixirWeb.DashboardLive do
         </div>
       </header>
 
+      <%= if @page == :history do %>
+        <.history_detail run={@history_run} />
+      <% else %>
       <%= if @payload[:error] do %>
         <section class="error-card">
           <h2 class="error-title">
@@ -110,6 +160,54 @@ defmodule SymphonyElixirWeb.DashboardLive do
             <p class="metric-value numeric"><%= format_runtime_seconds(total_runtime_seconds(@payload, @now)) %></p>
             <p class="metric-detail">Total Codex runtime across completed and active sessions.</p>
           </article>
+        </section>
+
+        <section class="section-card">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">Codex run history</h2>
+              <p class="section-copy">Completed, failed, blocked, and cancelled execution attempts.</p>
+            </div>
+          </div>
+
+          <%= if @history.runs == [] do %>
+            <p class="empty-state">No completed Codex runs.</p>
+          <% else %>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Issue</th>
+                    <th>Result</th>
+                    <th>Attempt</th>
+                    <th>Started</th>
+                    <th>Duration</th>
+                    <th>Tokens</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr :for={run <- @history.runs}>
+                    <td>
+                      <div class="issue-stack">
+                        <.issue_identifier identifier={run.issue_identifier} url={run.issue_url} />
+                        <a class="issue-link" href={"/history/#{run.run_id}"}>View log</a>
+                      </div>
+                    </td>
+                    <td><span class={state_badge_class(run.status)}><%= run.status %></span></td>
+                    <td class="numeric"><%= run.attempt || "n/a" %></td>
+                    <td class="mono"><%= run.started_at || "n/a" %></td>
+                    <td class="numeric"><%= format_history_duration(run.duration_seconds) %></td>
+                    <td>
+                      <div class="token-stack numeric">
+                        <span>Total: <%= format_int(run.tokens.total_tokens) %></span>
+                        <span class="muted">In <%= format_int(run.tokens.input_tokens) %> / Out <%= format_int(run.tokens.output_tokens) %></span>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          <% end %>
         </section>
 
         <section class="section-card">
@@ -160,6 +258,9 @@ defmodule SymphonyElixirWeb.DashboardLive do
                       <div class="issue-stack">
                         <.issue_identifier identifier={entry.issue_identifier} url={entry.issue_url} />
                         <a class="issue-link" href={"/api/v1/#{entry.issue_identifier}"}>JSON details</a>
+                        <%= if entry[:run_id] do %>
+                          <a class="issue-link" href={"/history/#{entry[:run_id]}"}>Live Codex log</a>
+                        <% end %>
                       </div>
                     </td>
                     <td>
@@ -241,6 +342,9 @@ defmodule SymphonyElixirWeb.DashboardLive do
                       <div class="issue-stack">
                         <.issue_identifier identifier={entry.issue_identifier} url={entry.issue_url} />
                         <a class="issue-link" href={"/api/v1/#{entry.issue_identifier}"}>JSON details</a>
+                        <%= if entry[:run_id] do %>
+                          <a class="issue-link" href={"/history/#{entry[:run_id]}"}>View Codex log</a>
+                        <% end %>
                       </div>
                     </td>
                     <td>
@@ -325,13 +429,131 @@ defmodule SymphonyElixirWeb.DashboardLive do
           <% end %>
         </section>
       <% end %>
+      <% end %>
     </section>
+    """
+  end
+
+  attr(:run, :map, required: true)
+
+  defp history_detail(assigns) do
+    ~H"""
+    <%= if @run[:error] do %>
+      <section class="error-card">
+        <h2 class="error-title">Run unavailable</h2>
+        <p class="error-copy"><strong><%= @run.error.code %>:</strong> <%= @run.error.message %></p>
+        <p><a class="issue-link" href="/">Back to dashboard</a></p>
+      </section>
+    <% else %>
+      <section class="section-card">
+        <div class="section-header">
+          <div>
+            <p class="eyebrow"><%= @run.issue_identifier || "Unknown issue" %></p>
+            <h2 class="section-title"><%= @run.status || "running" %> · attempt <%= @run.attempt || "n/a" %></h2>
+            <p class="section-copy mono"><%= @run.run_id %></p>
+          </div>
+          <a class="issue-link" href="/">Back to dashboard</a>
+        </div>
+
+        <div class="history-summary">
+          <span>Started <strong><%= @run.started_at || "n/a" %></strong></span>
+          <span>Finished <strong><%= @run.finished_at || "running" %></strong></span>
+          <span>Duration <strong><%= format_history_duration(@run.duration_seconds) %></strong></span>
+          <span>Tokens <strong><%= format_int(@run.tokens.total_tokens) %></strong></span>
+        </div>
+      </section>
+
+      <% events = visible_history_events(@run) %>
+      <% log_entries = @run.events |> history_log_entries() |> visible_history_log_entries(@run) %>
+      <% live_window? = length(events) < length(@run.events) %>
+
+      <section class="section-card codex-log-card">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">Codex output</h2>
+            <p class="section-copy">Readable execution output. The log stays in this panel while the run is active.</p>
+          </div>
+          <span class={history_status_class(@run.status)}><%= @run.status || "running" %></span>
+        </div>
+
+        <%= if live_window? do %>
+          <p class="log-window-note">
+            Showing the latest <%= max_live_log_events() %> events while live. The complete log is retained in history.
+          </p>
+        <% end %>
+
+        <%= if events == [] do %>
+          <p class="empty-state">No Codex events recorded yet.</p>
+        <% else %>
+          <div class="codex-terminal" id="codex-terminal">
+            <div class="codex-terminal-bar">
+              <span class="terminal-lights" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span class="codex-terminal-title">codex app-server</span>
+              <span class="codex-terminal-mode">human-readable</span>
+            </div>
+
+            <ol id="codex-log" class="codex-log-stream" aria-label="Codex execution log">
+              <li
+                :for={{event, index} <- Enum.with_index(log_entries)}
+                id={"codex-log-event-#{index}"}
+                class={["codex-log-line", history_event_class(event.event)]}
+              >
+                <time class="codex-log-time mono" datetime={event.at || ""}>
+                  <%= format_history_time(event.at) %>
+                </time>
+                <span class="codex-log-marker" aria-hidden="true"></span>
+                <div class="codex-log-content">
+                  <span class="codex-log-kind"><%= history_event_label(event.event) %></span>
+                  <p class="codex-log-text"><%= history_event_text(event) %></p>
+                </div>
+              </li>
+            </ol>
+          </div>
+        <% end %>
+
+        <details class="history-debug">
+          <summary>Raw JSONL (debug)</summary>
+          <div class="history-debug-list">
+            <article :for={{event, index} <- Enum.with_index(events)} class="history-debug-event">
+              <div class="history-debug-header">
+                <span><%= index + 1 %>. <%= history_event_label(event.event) %></span>
+                <span class="muted mono"><%= format_history_time(event.at) %></span>
+              </div>
+              <pre class="code-panel"><%= event.raw || "n/a" %></pre>
+            </article>
+          </div>
+        </details>
+      </section>
+    <% end %>
     """
   end
 
   defp load_payload do
     Presenter.state_payload(orchestrator(), snapshot_timeout_ms())
   end
+
+  defp load_history do
+    Presenter.history_payload()
+  end
+
+  defp load_history_run(run_id) do
+    case Presenter.history_run_payload(run_id) do
+      {:ok, run} -> run
+      {:error, :run_not_found} -> %{error: %{code: "run_not_found", message: "Run not found"}}
+    end
+  end
+
+  defp reload_history_run(%{assigns: %{page: :history, run_id: run_id}} = socket) do
+    assign(socket, :history_run, load_history_run(run_id))
+  end
+
+  defp reload_history_run(socket), do: socket
+
+  defp reload_active_history_run(%{assigns: %{history_run: %{finished_at: finished_at}}} = socket)
+       when is_binary(finished_at),
+       do: socket
+
+  defp reload_active_history_run(socket), do: reload_history_run(socket)
 
   defp orchestrator do
     Endpoint.config(:orchestrator) || SymphonyElixir.Orchestrator
@@ -401,6 +623,182 @@ defmodule SymphonyElixirWeb.DashboardLive do
     secs = rem(whole_seconds, 60)
     "#{mins}m #{secs}s"
   end
+
+  defp format_history_duration(seconds) when is_number(seconds), do: format_runtime_seconds(seconds)
+  defp format_history_duration(_seconds), do: "n/a"
+
+  defp visible_history_events(%{events: events, finished_at: nil}) do
+    Enum.take(events, -@max_live_log_events)
+  end
+
+  defp visible_history_events(%{events: events}), do: events
+
+  defp max_live_log_events, do: @max_live_log_events
+
+  defp visible_history_log_entries(entries, %{finished_at: nil}),
+    do: Enum.take(entries, -@max_live_log_events)
+
+  defp visible_history_log_entries(entries, _run), do: entries
+
+  defp history_log_entries(events) do
+    events
+    |> Enum.reduce([], &append_history_log_entry/2)
+    |> Enum.reverse()
+  end
+
+  defp append_history_log_entry(event, entries) do
+    if agent_message_streaming?(event) do
+      append_agent_message_entry(event, entries)
+    else
+      [event | entries]
+    end
+  end
+
+  defp append_agent_message_entry(event, [%{event: :agent_message} = entry | rest]) do
+    [merge_agent_message(entry, event) | rest]
+  end
+
+  defp append_agent_message_entry(event, entries), do: [new_agent_message_entry(event) | entries]
+
+  defp new_agent_message_entry(event) do
+    delta = history_stream_delta(event)
+
+    %{
+      at: Map.get(event, :at),
+      event: :agent_message,
+      summary: "agent message",
+      display: normalize_history_stream_text(delta)
+    }
+  end
+
+  defp merge_agent_message(entry, event) do
+    delta = history_stream_delta(event) || ""
+    display = merge_history_stream_text(Map.get(entry, :display), delta)
+
+    entry
+    |> Map.put(:at, Map.get(event, :at) || Map.get(entry, :at))
+    |> Map.put(:display, display)
+  end
+
+  defp agent_message_streaming?(event) do
+    stream_text = Map.get(event, :stream_text) || Map.get(event, "stream_text")
+
+    if is_binary(stream_text) do
+      true
+    else
+      summary = Map.get(event, :summary) || Map.get(event, "summary") || ""
+      normalized = String.downcase(summary)
+
+      Enum.any?(@agent_message_summary_prefixes, &String.starts_with?(normalized, &1))
+    end
+  end
+
+  defp history_stream_delta(event) do
+    case Map.get(event, :stream_text) || Map.get(event, "stream_text") do
+      text when is_binary(text) -> text
+      _ -> raw_history_stream_delta(event) || summary_history_stream_delta(event)
+    end
+  end
+
+  defp raw_history_stream_delta(event) do
+    with raw when is_binary(raw) <- Map.get(event, :raw) || Map.get(event, "raw"),
+         {:ok, payload} <- Jason.decode(raw),
+         text when is_binary(text) <- Enum.find_value(@history_stream_delta_paths, &history_json_path(payload, &1)) do
+      text
+    else
+      _ -> nil
+    end
+  end
+
+  defp summary_history_stream_delta(event) do
+    summary = Map.get(event, :summary) || Map.get(event, "summary") || ""
+
+    Enum.find_value(@agent_message_summary_prefixes, fn prefix ->
+      prefix = prefix <> ": "
+      if String.starts_with?(summary, prefix), do: String.replace_prefix(summary, prefix, "")
+    end)
+  end
+
+  defp history_json_path(value, []), do: value
+
+  defp history_json_path(value, [key | rest]) when is_map(value),
+    do: history_json_path(Map.get(value, key), rest)
+
+  defp history_json_path(_value, _path), do: nil
+
+  defp merge_history_stream_text(nil, ""), do: nil
+  defp merge_history_stream_text(nil, delta), do: normalize_history_stream_text(delta)
+
+  defp merge_history_stream_text(existing, delta),
+    do: normalize_history_stream_text(existing <> delta)
+
+  defp normalize_history_stream_text(nil), do: nil
+
+  defp normalize_history_stream_text(text) do
+    text
+    |> String.replace("\r\n", "\n")
+    |> String.replace("\r", "\n")
+    |> String.replace(~r/\n{3,}/, "\n\n")
+  end
+
+  defp history_status_class(status) do
+    normalized = status |> to_string() |> String.downcase()
+
+    cond do
+      String.contains?(normalized, ["failed", "error", "blocked", "cancelled"]) ->
+        "codex-terminal-status codex-terminal-status-danger"
+
+      String.contains?(normalized, ["completed", "success"]) ->
+        "codex-terminal-status codex-terminal-status-success"
+
+      true ->
+        "codex-terminal-status codex-terminal-status-live"
+    end
+  end
+
+  defp history_event_class(event) do
+    normalized = history_event_label(event) |> String.downcase()
+
+    cond do
+      String.contains?(normalized, ["failed", "error", "blocked", "cancelled", "malformed"]) ->
+        "codex-log-line-danger"
+
+      String.contains?(normalized, ["started", "completed", "success"]) ->
+        "codex-log-line-success"
+
+      true ->
+        "codex-log-line-neutral"
+    end
+  end
+
+  defp history_event_label(event) when is_atom(event), do: event |> Atom.to_string() |> format_event_label()
+  defp history_event_label(event) when is_binary(event), do: format_event_label(event)
+  defp history_event_label(_event), do: "event"
+
+  defp format_event_label(event) do
+    event
+    |> String.replace("_", " ")
+    |> String.replace("/", " · ")
+  end
+
+  defp history_event_text(event) do
+    display = Map.get(event, :display) || Map.get(event, "display")
+
+    if is_binary(display) and display != "" do
+      display
+    else
+      Map.get(event, :summary) || Map.get(event, "summary") || "event received"
+    end
+  end
+
+  defp format_history_time(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> Calendar.strftime(datetime, "%H:%M:%S")
+      _ -> value
+    end
+  end
+
+  defp format_history_time(_value), do: "n/a"
 
   defp runtime_seconds_from_started_at(%DateTime{} = started_at, %DateTime{} = now) do
     DateTime.diff(now, started_at, :second)

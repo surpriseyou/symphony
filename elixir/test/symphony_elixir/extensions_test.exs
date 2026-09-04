@@ -4,6 +4,7 @@ defmodule SymphonyElixir.ExtensionsTest do
   import Phoenix.ConnTest
   import Phoenix.LiveViewTest
 
+  alias SymphonyElixir.CodexHistory
   alias SymphonyElixir.Linear.Adapter
   alias SymphonyElixir.Tracker.Memory
 
@@ -344,6 +345,7 @@ defmodule SymphonyElixir.ExtensionsTest do
              "retry" => nil,
              "blocked" => nil,
              "logs" => %{"codex_session_logs" => []},
+             "history" => [],
              "recent_events" => [],
              "last_error" => nil,
              "tracked" => %{}
@@ -412,6 +414,104 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "message" => "Orchestrator is unavailable"
                }
              }
+  end
+
+  test "history api exposes completed runs and issue history after a restart" do
+    root = Path.join(System.tmp_dir!(), "symphony-history-api-#{System.unique_integer([:positive])}")
+    path = Path.join(root, "codex-history.jsonl")
+    history_name = Module.concat(__MODULE__, "HistoryApi#{System.unique_integer([:positive])}")
+    {:ok, history_pid} = CodexHistory.start_link(name: history_name, path: path)
+    previous_history_server = Application.get_env(:symphony_elixir, :codex_history_server)
+    Application.put_env(:symphony_elixir, :codex_history_server, history_name)
+
+    on_exit(fn ->
+      if Process.alive?(history_pid), do: GenServer.stop(history_pid)
+      restore_history_server(previous_history_server)
+      File.rm_rf(root)
+    end)
+
+    run = %{
+      run_id: "run-api",
+      issue_id: "issue-api",
+      issue_identifier: "MT-API",
+      issue_url: "https://example.org/issues/MT-API",
+      attempt: 1,
+      started_at: DateTime.add(DateTime.utc_now(), -1, :second),
+      codex_input_tokens: 2,
+      codex_output_tokens: 3,
+      codex_total_tokens: 5
+    }
+
+    assert :ok = CodexHistory.start_run(run, history_name)
+
+    assert :ok =
+             CodexHistory.record_event(
+               run,
+               %{
+                 event: :notification,
+                 timestamp: DateTime.utc_now(),
+                 payload: %{"method" => "item/started"},
+                 raw: "{\"method\":\"item/started\"}"
+               },
+               history_name
+             )
+
+    Enum.each(["Hello ", "world"], fn delta ->
+      assert :ok =
+               CodexHistory.record_event(
+                 run,
+                 %{
+                   event: :notification,
+                   timestamp: DateTime.utc_now(),
+                   payload: %{
+                     "method" => "item/agentMessage/delta",
+                     "params" => %{"delta" => delta}
+                   },
+                   raw:
+                     Jason.encode!(%{
+                       "method" => "item/agentMessage/delta",
+                       "params" => %{"delta" => delta}
+                     })
+                 },
+                 history_name
+               )
+    end)
+
+    assert :ok = CodexHistory.finish_run(run, :completed, nil, history_name)
+    start_test_endpoint(orchestrator: Module.concat(__MODULE__, :MissingHistoryOrchestrator))
+
+    history = json_response(get(build_conn(), "/api/v1/history?limit=1"), 200)
+    assert history["count"] == 1
+    assert [%{"run_id" => "run-api", "status" => "completed"}] = history["runs"]
+
+    run_payload = json_response(get(build_conn(), "/api/v1/history/run-api"), 200)
+    assert run_payload["run_id"] == "run-api"
+    assert [%{"raw" => "{\"method\":\"item/started\"}"} | _] = run_payload["events"]
+
+    issue_payload = json_response(get(build_conn(), "/api/v1/MT-API"), 200)
+    assert issue_payload["status"] == "completed"
+    assert [%{"run_id" => "run-api"}] = issue_payload["history"]
+
+    {:ok, _view, html} = live(build_conn(), "/history/run-api")
+    assert html =~ "Codex Run History"
+    assert html =~ "Codex output"
+    assert html =~ "codex-terminal"
+    assert html =~ "codex-log-stream"
+    assert html =~ "item started"
+    assert html =~ "Hello world"
+    assert 2 == length(String.split(html, "class=\"codex-log-line")) - 1
+    assert html =~ "Raw JSONL"
+    assert html =~ "{&quot;method&quot;:&quot;item/started&quot;}"
+  end
+
+  test "history api rejects invalid limits and missing runs" do
+    start_test_endpoint(orchestrator: Module.concat(__MODULE__, :InvalidHistoryOrchestrator))
+
+    assert json_response(get(build_conn(), "/api/v1/history?limit=0"), 400) ==
+             %{"error" => %{"code" => "invalid_limit", "message" => "limit must be an integer between 1 and 100"}}
+
+    assert json_response(get(build_conn(), "/api/v1/history/missing-run"), 404) ==
+             %{"error" => %{"code" => "run_not_found", "message" => "Run not found"}}
   end
 
   test "phoenix observability api preserves snapshot timeout behavior" do
@@ -651,6 +751,9 @@ defmodule SymphonyElixir.ExtensionsTest do
     Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, endpoint_config)
     start_supervised!({SymphonyElixirWeb.Endpoint, []})
   end
+
+  defp restore_history_server(nil), do: Application.delete_env(:symphony_elixir, :codex_history_server)
+  defp restore_history_server(server), do: Application.put_env(:symphony_elixir, :codex_history_server, server)
 
   defp static_snapshot do
     %{
